@@ -14,7 +14,6 @@ from sklearn.metrics import accuracy_score, classification_report
 import pickle
 import shap
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Define a function to create pipelines
 def create_pipeline(model):
@@ -55,117 +54,92 @@ if uploaded_file is not None:
             # Convert Anomaly_Label from -1 and 1 to 0 and 1
             data['Anomaly_Label'] = data['Anomaly_Label'].replace({-1: 0, 1: 1})
             
-            # Create tabs
-            tab1, tab2 = st.tabs(["Exploratory Data Analysis", "Model Performance"])
+            # Separate features and target
+            X = data.drop(columns=['Anomaly_Label'])
+            y = data['Anomaly_Label']
             
-            with tab1:
-                st.subheader("Exploratory Data Analysis")
-                
-                st.write("### Basic Information")
-                st.write(data.describe())
-                
-                st.write("### Data Distribution")
-                st.write("#### Anomaly_Label Distribution")
-                st.bar_chart(data['Anomaly_Label'].value_counts())
-                
-                st.write("#### Pair Plot")
-                sns.pairplot(data, hue='Anomaly_Label')
-                st.pyplot()
-                
-                st.write("#### Correlation Heatmap")
-                corr = data.corr()
-                sns.heatmap(corr, annot=True, cmap='coolwarm')
-                st.pyplot()
+            # Split the data into training and testing sets
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
             
-            with tab2:
-                st.subheader("Model Performance")
+            results = []
+            
+            for model_name, model in models.items():
+                pipeline = create_pipeline(model)
                 
-                # Separate features and target
-                X = data.drop(columns=['Anomaly_Label'])
-                y = data['Anomaly_Label']
+                # Apply cross-validation
+                cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5)
+                mean_cv_accuracy = np.mean(cv_scores)
                 
-                # Split the data into training and testing sets
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+                # Train the model
+                pipeline.fit(X_train, y_train)
                 
-                results = []
+                # Save the trained model
+                with open(f'{model_name}_model.pkl', 'wb') as f:
+                    pickle.dump(pipeline, f)
                 
-                for model_name, model in models.items():
-                    pipeline = create_pipeline(model)
-                    
-                    # Apply cross-validation
-                    cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5)
-                    mean_cv_accuracy = np.mean(cv_scores)
-                    
-                    # Train the model
-                    pipeline.fit(X_train, y_train)
-                    
-                    # Save the trained model
-                    with open(f'{model_name}_model.pkl', 'wb') as f:
-                        pickle.dump(pipeline, f)
-                    
-                    # Predictions and probabilities
-                    y_pred = pipeline.predict(X_test)
-                    
-                    accuracy = accuracy_score(y_test, y_pred)
-                    report = classification_report(y_test, y_pred, output_dict=True)
-                    
-                    # Collect results
-                    results.append({
-                        'Model': model_name,
-                        'Mean CV Accuracy': mean_cv_accuracy,
-                        'Accuracy': accuracy
-                    })
+                # Predictions and probabilities
+                y_pred = pipeline.predict(X_test)
                 
-                # Display results in a table
-                results_df = pd.DataFrame(results)
-                st.write(results_df)
+                accuracy = accuracy_score(y_test, y_pred)
                 
-                # Calculate SHAP values for the best model (highest accuracy)
-                best_model_name = results_df.loc[results_df['Accuracy'].idxmax()]['Model']
-                best_model = models[best_model_name]
-                best_pipeline = create_pipeline(best_model)
-                best_pipeline.fit(X_train, y_train)
-                
-                st.subheader(f"SHAP Values for {best_model_name}")
-                explainer = shap.Explainer(best_pipeline.named_steps['classifier'], X_train)
-                shap_values = explainer(X_test)
-                
-                # Summary plot
-                st.set_option('deprecation.showPyplotGlobalUse', False)
-                shap.summary_plot(shap_values, X_test, plot_type="bar")
-                st.pyplot(bbox_inches='tight')
-                
-                # Feature importance (for tree-based models)
-                if best_model_name in ['Decision Tree', 'Random Forest', 'Gradient Boosting']:
-                    st.subheader(f"Feature Importance for {best_model_name}")
-                    importance = best_pipeline.named_steps['classifier'].feature_importances_
-                    importance_df = pd.DataFrame({'Feature': X.columns, 'Importance': importance})
-                    importance_df = importance_df.sort_values(by='Importance', ascending=False)
-                    st.bar_chart(importance_df.set_index('Feature'))
-                
-                # Store the results for download
-                result_data = data.copy()
-                result_data['Predicted_Label'] = best_pipeline.predict(X)
-                
-                # Count normal points and outliers after prediction
-                normal_count_pred = (result_data['Predicted_Label'] == 0).sum()
-                outlier_count_pred = (result_data['Predicted_Label'] == 1).sum()
-                
-                st.subheader("Counts of Normal Points and Outliers After Prediction")
-                st.write(f"Normal Points: {normal_count_pred}")
-                st.write(f"Outliers: {outlier_count_pred}")
-                
-                st.subheader("Scored Data with Predictions")
-                st.write(result_data.head())
+                # Collect results
+                results.append({
+                    'Model': model_name,
+                    'Mean CV Accuracy': mean_cv_accuracy,
+                    'Test Accuracy': accuracy
+                })
+            
+            # Display results in a table
+            results_df = pd.DataFrame(results)
+            st.subheader("Model Performance Comparison")
+            st.write(results_df)
+            
+            # Calculate SHAP values for the best model (highest accuracy)
+            best_model_name = results_df.loc[results_df['Test Accuracy'].idxmax()]['Model']
+            best_model = models[best_model_name]
+            best_pipeline = create_pipeline(best_model)
+            best_pipeline.fit(X_train, y_train)
+            
+            st.subheader(f"SHAP Values for {best_model_name}")
+            explainer = shap.Explainer(best_pipeline.named_steps['classifier'], X_train)
+            shap_values = explainer(X_test)
+            
+            # Summary plot
+            st.set_option('deprecation.showPyplotGlobalUse', False)
+            shap.summary_plot(shap_values, X_test, plot_type="bar")
+            st.pyplot(bbox_inches='tight')
+            
+            # Feature importance (for tree-based models)
+            if best_model_name in ['Decision Tree', 'Random Forest', 'Gradient Boosting']:
+                st.subheader(f"Feature Importance for {best_model_name}")
+                importance = best_pipeline.named_steps['classifier'].feature_importances_
+                importance_df = pd.DataFrame({'Feature': X.columns, 'Importance': importance})
+                importance_df = importance_df.sort_values(by='Importance', ascending=False)
+                st.bar_chart(importance_df.set_index('Feature'))
+            
+            # Store the results for download
+            result_data = data.copy()
+            result_data['Predicted_Label'] = best_pipeline.predict(X)
+            
+            # Count normal points and outliers after prediction
+            normal_count_pred = (result_data['Predicted_Label'] == 0).sum()
+            outlier_count_pred = (result_data['Predicted_Label'] == 1).sum()
+            
+            st.subheader("Counts of Normal Points and Outliers After Prediction")
+            st.write(f"Normal Points: {normal_count_pred}")
+            st.write(f"Outliers: {outlier_count_pred}")
+            
+            st.subheader("Scored Data with Predictions")
+            st.write(result_data.head())
 
-                result_csv = result_data.to_csv(index=False)
-                
-                st.download_button(
-                    label="Download Scored Data with Predictions as CSV",
-                    data=result_csv,
-                    file_name='scored_data_with_predictions.csv',
-                    mime='text/csv'
-                )
+            result_csv = result_data.to_csv(index=False)
+            
+            st.download_button(
+                label="Download Scored Data with Predictions as CSV",
+                data=result_csv,
+                file_name='scored_data_with_predictions.csv',
+                mime='text/csv'
+            )
             
     except Exception as e:
         st.error(f"An error occurred: {e}")
